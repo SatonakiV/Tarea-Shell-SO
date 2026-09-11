@@ -8,8 +8,7 @@
 
 #include "shell.h"
 
-static void show_prompt(void)
-{
+static void show_prompt(void){
 
     char *directory = getcwd(NULL, 0);
 
@@ -24,8 +23,7 @@ static void show_prompt(void)
     fflush(stdout);
 }
 
-static int read_line(char **line, size_t *capacity)
-{
+static int read_line(char **line, size_t *capacity){
     int interactive = isatty(STDIN_FILENO);
 
     for (;;) {
@@ -58,8 +56,7 @@ static int read_line(char **line, size_t *capacity)
     }
 }
 
-static int builtin_cd(const Command *command)
-{
+static int builtin_cd(const Command *command){
     const char *directory;
 
     if (command->argc > 2) {
@@ -85,9 +82,7 @@ static int builtin_cd(const Command *command)
     return 0;
 }
 
-static int builtin_exit(
-    const Command *command, int *should_exit, int *exit_code)
-{
+static int builtin_exit(const Command *command, int *should_exit, int *exit_code){
     long value = 0;
 
     if (command->argc > 2) {
@@ -116,9 +111,57 @@ static int builtin_exit(
     return 0;
 }
 
-static int handle_builtin(
-    const Pipeline *pipeline, int *should_exit, int *exit_code)
-{
-    if (pipeline->command_count != 1) {
+static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_code){
+    if (pipeline->command_count != 1 || pipeline->background) {
         return 0;
     }
+    const Command *command = &pipeline->commands[0];
+    if (command->redir_count != 0) {
+        return 0;
+    }
+    if (strcmp(command->argv[0], "cd") == 0) {
+        *exit_code = builtin_cd(command);
+        return 1;
+    }
+    if (strcmp(command->argv[0], "exit") == 0) {
+        int status = builtin_exit(command, should_exit, exit_code);
+        if (!*should_exit) {
+            *exit_code = status;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int run_shell(void){
+    char *line = NULL;
+    size_t capacity = 0;
+    int should_exit = 0;
+    int exit_code = 0;
+
+    while (!should_exit) {
+        int read_status = read_line(&line, &capacity);
+        if (read_status <= 0) {
+            if (read_status < 0) {
+                exit_code = 1;
+            }
+            break;
+        }
+        Pipeline pipeline;
+        const char *error;
+        if (parse_line(line, &pipeline, &error) == -1) {
+            fprintf(stderr, "sintaxis: %s\n", error);
+            exit_code = 2;
+            continue;
+        }
+        if (pipeline.command_count != 0 &&
+            !handle_builtin(&pipeline, &should_exit, &exit_code)) {
+            fprintf(stderr, "ejecucion pendiente: esta version solo ejecuta cd y exit "
+                    "sin pipes, redirecciones ni background\n");
+            exit_code = 1;
+        }
+        free_pipeline(&pipeline);
+    }
+    free(line);
+    return exit_code;
+}
