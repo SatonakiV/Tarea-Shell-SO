@@ -6,6 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "executor.h"
 #include "shell.h"
 
 static void show_prompt(void){
@@ -156,9 +157,8 @@ int run_shell(void){
         }
         if (pipeline.command_count != 0 &&
             !handle_builtin(&pipeline, &should_exit, &exit_code)) {
-            fprintf(stderr, "ejecucion pendiente: esta version solo ejecuta cd y exit "
-                    "sin pipes, redirecciones ni background\n");
-            exit_code = 1;
+            int status = 0;
+            exit_code = (execute_pipeline(&pipeline, &status) == 0) ? status : 1;
         }
         free_pipeline(&pipeline);
     }
