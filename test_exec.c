@@ -58,14 +58,14 @@ static void check_file(const char *path, const char *expected) {
     }
 }
 
-static void run_redir_case(const char *title, char **argv, Redirection *redirs, size_t redir_count, int expected) {
-    Command command = wrap_command(argv, redirs, redir_count);
+// Ejecuta un pipeline de N comandos ya construidos por el llamador
+static void run_pipeline_case(const char *title, Command *commands, size_t command_count, int expected) {
     Pipeline pipeline = (Pipeline){0};
     int status = -999;
     int rc;
 
-    pipeline.commands = &command;
-    pipeline.command_count = 1;
+    pipeline.commands = commands;
+    pipeline.command_count = command_count;
 
     printf("+++ %s +++ \n", title);
     fflush(stdout);
@@ -76,10 +76,15 @@ static void run_redir_case(const char *title, char **argv, Redirection *redirs, 
     fflush(stdout);
 }
 
+static void run_redir_case(const char *title, char **argv, Redirection *redirs, size_t redir_count, int expected) {
+    Command command = wrap_command(argv, redirs, redir_count);
+
+    run_pipeline_case(title, &command, 1, expected);
+}
+
 static void run_case(const char *title, char **argv, int expected) {
     run_redir_case(title, argv, NULL, 0, expected);
 }
-
 
 int main(void) {
     static char *echo_abs[] = { "/bin/echo", "hola", "mundo", NULL };
@@ -142,6 +147,80 @@ int main(void) {
         remove("test_out.txt");
         run_redir_case("14. execvp falla pero el open ya ocurrio", noexiste2, out, 1, EXEC_NOT_FOUND);
         check_file("test_out.txt", "");
+
+        remove("test_out.txt");
+        remove("test_in.txt");
+    }
+
+    {
+        static char *echo_hola2[] = { "echo", "hola", NULL };
+        static char *cat2[] = { "cat", NULL };
+        static char *sort2[] = { "sort", NULL };
+        static char *head1[] = { "head", "-1", NULL };
+        static char *head5[] = { "head", "-5", NULL };
+        static char *upper[] = { "tr", "a-z", "A-Z", NULL };
+        static char *yes_cmd[] = { "yes", NULL };
+        static char *wc_lines[] = { "wc", "-l", NULL };
+        static char *noexiste3[] = { "comando-que-no-existe-xyz", NULL };
+        static char *verdad[] = { "true", NULL };
+        static char *falso2[] = { "false", NULL };
+
+        static Redirection r_out[] = { { REDIR_OUTPUT, "test_out.txt" } };
+        static Redirection r_in[]  = { { REDIR_INPUT,  "test_in.txt"  } };
+
+        write_file("test_in.txt", "pera\nmanzana\nuva\n");
+
+        {
+            Command cmds[] = { wrap_command(echo_hola2, NULL, 0), wrap_command(cat2, r_out, 1) };
+
+            remove("test_out.txt");
+            run_pipeline_case("15. pipe de 2 y '>' le gana al pipe", cmds, 2, 0);
+            check_file("test_out.txt", "hola\n");
+        }
+
+        {
+            Command cmds[] = { wrap_command(cat2, r_in, 1), wrap_command(sort2, NULL, 0), wrap_command(head1, r_out, 1) };
+            
+            remove("test_out.txt");
+            run_pipeline_case("16. pipe de 3 con < y >", cmds, 3, 0);
+            check_file("test_out.txt", "manzana\n");
+        }
+
+        {
+            Command cmds[] = { wrap_command(cat2, r_in, 1), wrap_command(sort2, NULL, 0), wrap_command(head1, NULL, 0), wrap_command(upper, r_out, 1) };
+            
+            remove("test_out.txt");
+            run_pipeline_case("17. pipe de 4", cmds, 4, 0);
+            check_file("test_out.txt", "MANZANA\n");
+        }
+
+        {
+            Command cmds[] = { wrap_command(yes_cmd, NULL, 0), wrap_command(head5, r_out, 1) };
+            
+            remove("test_out.txt");
+            run_pipeline_case("18. EOF correcto: yes | head -5 termina", cmds, 2, 0);
+            check_file("test_out.txt", "y\ny\ny\ny\ny\n");
+        }
+
+        {
+            Command cmds[] = { wrap_command(echo_hola2, NULL, 0), wrap_command(noexiste3, NULL, 0), wrap_command(wc_lines, r_out, 1) };
+            
+            remove("test_out.txt");
+            run_pipeline_case("19. comando intermedio fallido", cmds, 3, 0);
+            check_file("test_out.txt", "0\n");
+        }
+
+        {
+            Command cmds[] = { wrap_command(verdad, NULL, 0), wrap_command(falso2, NULL, 0) };
+            
+            run_pipeline_case("20. true | false -> status del ultimo (1)", cmds, 2, 1);
+        }
+
+        {
+            Command cmds[] = { wrap_command(falso2, NULL, 0), wrap_command(verdad, NULL, 0) };
+            
+            run_pipeline_case("21. false | true -> status del ultimo (0)", cmds, 2, 0);
+        }
 
         remove("test_out.txt");
         remove("test_in.txt");
