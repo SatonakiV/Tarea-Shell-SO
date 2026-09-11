@@ -1,0 +1,11 @@
+#ifndef EXECUTOR_H
+#define EXECUTOR_H
+
+#include "shell.h"
+
+#define EXEC_CANNOT_EXECUTE 126
+#define EXEC_NOT_FOUND 127
+
+int execute_pipeline(const Pipeline *pipeline, int *status);
+
+#endif
