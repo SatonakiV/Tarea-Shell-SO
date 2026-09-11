@@ -16,8 +16,7 @@ typedef enum {
     TOK_BACKGROUND
 } TokenType;
 
-void free_pipeline(Pipeline *pipeline)
-{
+void free_pipeline(Pipeline *pipeline){
     for (size_t i = 0; i < pipeline->command_count; i++) {
         Command *command = &pipeline->commands[i];
         for (size_t j = 0; j < command->argc; j++) {
@@ -51,8 +50,7 @@ static int add_command(Pipeline *pipeline)
     return 0;
 }
 
-static int add_argument(Command *command, char *word)
-{
+static int add_argument(Command *command, char *word){
 
     char **new_argv = realloc(
         command->argv, (command->argc + 2) * sizeof(*new_argv));
@@ -68,8 +66,7 @@ static int add_argument(Command *command, char *word)
     return 0;
 }
 
-static int add_redirection(Command *command, RedirType type, char *filename)
-{
+static int add_redirection(Command *command, RedirType type, char *filename){
     size_t count = command->redir_count;
     Redirection *new_redirs = realloc(
         command->redirs, (count + 1) * sizeof(*new_redirs));
@@ -85,8 +82,7 @@ static int add_redirection(Command *command, RedirType type, char *filename)
     return 0;
 }
 
-static TokenType next_token(const char **cursor, char **word)
-{
+static TokenType next_token(const char **cursor, char **word){
     const char *p = *cursor;
     *word = NULL;
 
@@ -120,9 +116,118 @@ static TokenType next_token(const char **cursor, char **word)
             break;
     }
 
+    char *buffer = malloc(strlen(p) + 1);
+    if (buffer == NULL) {
+        return TOK_NOMEM;
+    }
+    size_t length = 0;
+    char quote = '\0';
+    while (*p != '\0') {
+        if (quote == '\0' && (isspace((unsigned char)*p) || strchr("|<>&", *p))) {
+            break;
+        }
+        if (*p == '\\' && quote != '\'') {
+            p++;
+            if (*p == '\0') {
+                free(buffer);
+                return TOK_UNSUPPORTED;
+            }
+            if (quote == '"' && *p != '"' && *p != '\\' &&
+                *p != '$' && *p != '`') {
+                buffer[length++] = '\\';
+            }
+            buffer[length++] = *p++;
+        } else if (*p == '\'' || *p == '"') {
+            if (quote == '\0') {
+                quote = *p++;
+            } else if (quote == *p) {
+                quote = '\0';
+                p++;
+            } else {
+                buffer[length++] = *p++;
+            }
+        } else {
+            buffer[length++] = *p++;
+        }
+    }
+    if (quote != '\0') {
+        free(buffer);
+        return TOK_UNSUPPORTED;
+    }
+    buffer[length] = '\0';
+    *word = buffer;
+    *cursor = p;
+    return TOK_WORD;
+}
 
+int parse_line(const char *line, Pipeline *out, const char **error){
+    const char *cursor = line;
+    char *word = NULL;
+    *out = (Pipeline){0};
+    *error = NULL;
 
+    for (;;) {
+        TokenType token = next_token(&cursor, &word);
+        if (token == TOK_NOMEM) {
+            goto nomem;
+        }
+        if (token == TOK_UNSUPPORTED) {
+            *error = "comillas o escape sin cerrar";
+            goto fail;
+        }
+        if (token == TOK_END && out->command_count == 0) {
+            return 0;
+        }
+        if (out->command_count == 0 && add_command(out) == -1) {
+            goto nomem;
+        }
+        Command *command = &out->commands[out->command_count - 1];
+        if (token == TOK_WORD) {
+            if (add_argument(command, word) == -1) {
+                goto nomem;
+            }
+            word = NULL;
+        } else if (token == TOK_INPUT || token == TOK_OUTPUT || token == TOK_APPEND) {
+            TokenType filename_token = next_token(&cursor, &word);
+            if (filename_token == TOK_NOMEM) {
+                goto nomem;
+            }
+            if (filename_token != TOK_WORD) {
+                *error = "se esperaba un archivo despues de la redireccion";
+                goto fail;
+            }
+            RedirType type = token == TOK_INPUT ? REDIR_INPUT :
+                token == TOK_OUTPUT ? REDIR_OUTPUT : REDIR_APPEND;
+            if (add_redirection(command, type, word) == -1) {
+                goto nomem;
+            }
+            word = NULL;
+        } else {
+            if (command->argc == 0) {
+                *error = "falta un comando";
+                goto fail;
+            }
+            if (token == TOK_PIPE) {
+                if (add_command(out) == -1) {
+                    goto nomem;
+                }
+            } else if (token == TOK_BACKGROUND) {
+                if (next_token(&cursor, &word) != TOK_END) {
+                    *error = "& solo puede aparecer al final";
+                    goto fail;
+                }
+                out->background = 1;
+                return 0;
+            } else {
+                return 0;
+            }
+        }
+    }
 
-
-
-
+nomem:
+    *error = "memoria insuficiente";
+fail:
+    free(word);
+    free_pipeline(out);
+    return -1;
+}
