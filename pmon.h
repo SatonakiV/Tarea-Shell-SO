@@ -11,4 +11,5 @@ typedef struct {
 
 int leer_proc_stat(pid_t pid, ProcStat *info);
 
+int leer_proc_status(pid_t pid, unsigned long *rss_kb);
 #endif

@@ -21,7 +21,7 @@ int leer_proc_stat(pid_t pid, ProcStat *info){
 
     if(file == NULL) {
         return -1;
-    };
+    }
 
     char *linea = NULL;
     size_t capacidad = 0;
@@ -32,7 +32,7 @@ int leer_proc_stat(pid_t pid, ProcStat *info){
         fclose(file);
         free(linea);
         return -1;
-    };
+    }
 
     fclose(file);
 
@@ -57,7 +57,7 @@ int leer_proc_stat(pid_t pid, ProcStat *info){
                         &state, &utime, &stime);
 
     
-    // esperamos que lea 3 especificamente el sscanf, que son comm, utime, stime
+    // esperamos que lea 3 especificamente el sscanf, que son state, utime, stime
     if(leidos != 3){
         free(linea);
         return -1;
@@ -68,6 +68,42 @@ int leer_proc_stat(pid_t pid, ProcStat *info){
     info->stime = stime;
 
     free(linea);
+
+    return 0;
+
+}
+
+
+int leer_proc_status(pid_t pid, unsigned long *rss_kb){
+    char ruta[64];
+    snprintf(ruta, sizeof(ruta), "/proc/%ld/status", (long)pid);
+    FILE *file = fopen(ruta,"r");
+    
+    if(file == NULL) {
+        return -1;
+    };
+
+    char *linea = NULL;
+    size_t capacidad = 0;
+    int encontrado = 0;
+
+    while(getline(&linea, &capacidad, file) != -1){
+        
+        // Si la linea comienza con VmRSS en sus 6 primeros caracteres, 
+        // y si podemos extraer un unsigned long, se encontro el rss_kb
+        if((strncmp(linea, "VmRSS:", 6) == 0) && 
+            (sscanf(linea, "VmRSS: %lu kB", rss_kb) == 1)){
+            encontrado = 1;
+            break;
+        };
+    }
+
+    free(linea);
+    fclose(file);
+
+    if (encontrado == 0) {
+        return -1;
+    }
 
     return 0;
 
