@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include "pmon.h"
+
 
 int leer_proc_stat(pid_t pid, ProcStat *info){
     
@@ -162,4 +164,27 @@ double calcular_dif_tiempo(struct timespec anterior, struct timespec actual){
     double dif_nanosegundos = (double)(actual.tv_nsec - anterior.tv_nsec) / 1000000000.0;
 
     return dif_segundos + dif_nanosegundos;
+}
+
+int get_intervalo_segundos(const char *argumento, unsigned int *intervalo){
+
+    if (intervalo == NULL) {
+        return -1;
+    }
+
+    if (argumento == NULL) {
+        *intervalo = 2;
+        return 0;
+    }
+
+    char *fin;
+    long valor = strtol(argumento, &fin, 10);
+
+    if (argumento == fin || *fin != '\0' || valor <= 0 || valor > UINT_MAX) {
+        return -1;
+    }
+
+    *intervalo = (unsigned int)valor;
+
+    return 0;
 }
