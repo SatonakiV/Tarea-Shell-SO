@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "pmon.h"
 
@@ -132,4 +133,23 @@ int tomar_muestra(pid_t pid, MuestraProceso *muestra){
     muestra->rss_kb = rss_kb;
 
     return 0;
+}
+
+
+double calcular_cpu(unsigned long ticks_anterior, unsigned long ticks_actual,double dif_tiempo){
+    
+    long ticks_por_segundo = sysconf(_SC_CLK_TCK);
+
+    // evitar hacer calculo invalido
+    if (ticks_por_segundo <= 0 || dif_tiempo <= 0.0) {
+        return 0.0;
+    }
+
+    unsigned long dif_ticks = ticks_actual - ticks_anterior;
+
+    double cpu_time = (double)dif_ticks / (double)ticks_por_segundo;
+
+    double porcentaje = (cpu_time / dif_tiempo) * 100.0;
+
+    return porcentaje;
 }

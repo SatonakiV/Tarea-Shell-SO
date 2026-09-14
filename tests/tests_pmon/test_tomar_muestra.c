@@ -4,7 +4,7 @@
 #include "pmon.h"
 
 int main(int argc, char *argv[]){
-    
+
     if (argc != 2) {
         fprintf(stderr, "Uso: %s <pid>\n", argv[0]);
         return 1;
