@@ -83,6 +83,7 @@ int leer_proc_status(pid_t pid, unsigned long *rss_kb){
         return -1;
     };
 
+    // ----parseo de /proc/PID/status
     char *linea = NULL;
     size_t capacidad = 0;
     int encontrado = 0;
@@ -107,4 +108,28 @@ int leer_proc_status(pid_t pid, unsigned long *rss_kb){
 
     return 0;
 
+}
+
+
+int tomar_muestra(pid_t pid, MuestraProceso *muestra){
+    
+    ProcStat stat;
+
+    // volvemos a comprobar errores para invalidar la muestra en caso de que el proceso termine
+    if (leer_proc_stat(pid, &stat) == -1) {
+        return -1;
+    }
+
+    unsigned long rss_kb;
+
+    if (leer_proc_status(pid, &rss_kb) == -1) {
+        return -1;
+    }
+
+    muestra->pid = pid;
+    muestra->state = stat.state;
+    muestra->cpu_ticks = stat.utime + stat.stime;
+    muestra->rss_kb = rss_kb;
+
+    return 0;
 }
