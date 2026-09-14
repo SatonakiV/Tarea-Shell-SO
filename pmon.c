@@ -153,3 +153,13 @@ double calcular_cpu(unsigned long ticks_anterior, unsigned long ticks_actual,dou
 
     return porcentaje;
 }
+
+
+double calcular_dif_tiempo(struct timespec anterior, struct timespec actual){
+    
+    double dif_segundos = (double)(actual.tv_sec - anterior.tv_sec);
+
+    double dif_nanosegundos = (double)(actual.tv_nsec - anterior.tv_nsec) / 1000000000.0;
+
+    return dif_segundos + dif_nanosegundos;
+}
