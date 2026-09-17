@@ -131,3 +131,20 @@ static void sigchld_handler(int sig) {
 
 
 
+void jobs_init(void) {
+    memset(jobs, 0, sizeof(jobs));
+ 
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+ 
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+        perror("mishell: sigaction(SIGCHLD)");
+    }
+}
+ 
+ 
+
+
