@@ -159,4 +159,53 @@ void jobs_block_sigchld(sigset_t *old_mask) {
 void jobs_unblock_sigchld(const sigset_t *old_mask) {
     sigprocmask(SIG_SETMASK, old_mask, NULL);
 }
+
+
+ 
+static void free_job(Job *job) {
+    free(job->pids);
+    free(job->command_line);
+    memset(job, 0, sizeof(*job));
+    job->active = 0;
+}
+ 
+
+
+int jobs_add(const pid_t *pids, size_t pid_count, int background, const char *command_line){
+
+    Job *slot = NULL;
+ 
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (!jobs[i].active) {
+            slot = &jobs[i];
+            break;
+        }
+    }
+ 
+    if (slot == NULL || pid_count == 0) { return -1;}
+ 
+    pid_t *pids_copy = malloc(pid_count * sizeof(*pids_copy));
+    char *line_copy = strdup(command_line != NULL ? command_line : "");
+ 
+    if (pids_copy == NULL || line_copy == NULL) {
+        free(pids_copy);
+        free(line_copy);
+        return -1;
+    }
+ 
+    memcpy(pids_copy, pids, pid_count * sizeof(*pids_copy));
+ 
+    slot->id = next_job_id++;
+    slot->active = 1;
+    slot->pids = pids_copy;
+    slot->pid_count = pid_count;
+    slot->pending = pid_count;
+    slot->state = JOB_RUNNING;
+    slot->exit_code = 0;
+    slot->background = background;
+    slot->notified = 0;
+    slot->command_line = line_copy;
+ 
+    return slot->id;
+}
  
