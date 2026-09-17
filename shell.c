@@ -8,9 +8,11 @@
 
 #include "executor.h"
 #include "shell.h"
+#include "jobs.h"
 
 static void show_prompt(void){
 
+    jobs_notify_done();
     char *directory = getcwd(NULL, 0);
 
     if (directory == NULL) {
