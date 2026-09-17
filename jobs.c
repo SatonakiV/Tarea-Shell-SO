@@ -148,3 +148,15 @@ void jobs_init(void) {
  
 
 
+
+void jobs_block_sigchld(sigset_t *old_mask) {
+    sigset_t block_mask;
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &block_mask, old_mask);
+}
+ 
+void jobs_unblock_sigchld(const sigset_t *old_mask) {
+    sigprocmask(SIG_SETMASK, old_mask, NULL);
+}
+ 
