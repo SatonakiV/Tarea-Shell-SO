@@ -6,6 +6,6 @@
 #define EXEC_CANNOT_EXECUTE 126
 #define EXEC_NOT_FOUND 127
 
-int execute_pipeline(const Pipeline *pipeline, int *status);
+int execute_pipeline(const Pipeline *pipeline, const char *line, int *status);
 
 #endif
