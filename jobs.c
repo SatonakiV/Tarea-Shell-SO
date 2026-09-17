@@ -209,3 +209,30 @@ int jobs_add(const pid_t *pids, size_t pid_count, int background, const char *co
     return slot->id;
 }
  
+
+
+
+int jobs_wait_foreground(int job_id) {
+    sigset_t old_mask;
+    jobs_block_sigchld(&old_mask);
+ 
+    Job *job = find_job_by_id(job_id);
+ 
+
+
+    if (job == NULL) {
+        jobs_unblock_sigchld(&old_mask);
+        return -1;
+    }
+ 
+    while (job->state != JOB_DONE) { sigsuspend(&old_mask);}
+ 
+    int code = job->exit_code;
+    free_job(job);
+ 
+    jobs_unblock_sigchld(&old_mask);
+ 
+    return code;
+}
+
+
