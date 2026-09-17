@@ -236,3 +236,56 @@ int jobs_wait_foreground(int job_id) {
 }
 
 
+
+
+
+void jobs_list(void) {
+    sigset_t old_mask;
+    jobs_block_sigchld(&old_mask);
+ 
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (!jobs[i].active || !jobs[i].background) {
+            continue;
+        }
+ 
+        const char *estado = jobs[i].state == JOB_DONE ? "Terminado" : "Ejecutando";
+        pid_t pid_mostrado = jobs[i].pids[jobs[i].pid_count - 1];
+ 
+        printf("[%d] %d %s %s\n", jobs[i].id, pid_mostrado, estado,
+               jobs[i].command_line);
+    }
+ 
+    jobs_unblock_sigchld(&old_mask);
+}
+ 
+void jobs_notify_done(void) {
+    sigset_t old_mask;
+    jobs_block_sigchld(&old_mask);
+ 
+
+    
+    int most_recent_done_id = -1;
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (jobs[i].active && jobs[i].background &&
+            jobs[i].state == JOB_DONE && !jobs[i].notified &&
+            jobs[i].id > most_recent_done_id) {
+            most_recent_done_id = jobs[i].id;
+        }
+    }
+ 
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (!jobs[i].active || !jobs[i].background) {
+            continue;
+        }
+        if (jobs[i].state != JOB_DONE || jobs[i].notified) {
+            continue;
+        }
+ 
+        char marca = (jobs[i].id == most_recent_done_id) ? '+' : '-';
+        printf("[%d]%c Done %s\n", jobs[i].id, marca, jobs[i].command_line);
+ 
+        free_job(&jobs[i]);
+    }
+ 
+    jobs_unblock_sigchld(&old_mask);
+}
