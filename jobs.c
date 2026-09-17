@@ -27,3 +27,6 @@ typedef struct {
     char *command_line;
 } Job;
  
+static Job jobs[JOBS_MAX];
+static int next_job_id = 1;
+ 
