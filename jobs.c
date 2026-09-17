@@ -30,3 +30,31 @@ typedef struct {
 static Job jobs[JOBS_MAX];
 static int next_job_id = 1;
  
+
+
+
+
+
+static Job *find_job_by_pid(pid_t pid) {
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (!jobs[i].active) {
+            continue;
+        }
+        for (size_t j = 0; j < jobs[i].pid_count; j++) {
+            if (jobs[i].pids[j] == pid) {
+                return &jobs[i];
+            }
+        }
+    }
+    return NULL;
+}
+ 
+static Job *find_job_by_id(int id) {
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (jobs[i].active && jobs[i].id == id) {
+            return &jobs[i];
+        }
+    }
+    return NULL;
+}
+ 
