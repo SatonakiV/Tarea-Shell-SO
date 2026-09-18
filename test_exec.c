@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
-
 #include "executor.h"
+#include "jobs.h"
 
 static Command wrap_command(char **argv, Redirection *redirs, size_t redir_count) {
     Command command = (Command){0};
@@ -70,7 +70,7 @@ static void run_pipeline_case(const char *title, Command *commands, size_t comma
     printf("+++ %s +++ \n", title);
     fflush(stdout);
 
-    rc = execute_pipeline(&pipeline, &status);
+    rc = execute_pipeline(&pipeline, title, &status);
 
     printf("--> rc=%d status=%d (esperado %d) %s\n\n", rc, status, expected, (rc == 0 && status == expected) ? "OK" : "FALLO");
     fflush(stdout);
@@ -87,6 +87,7 @@ static void run_case(const char *title, char **argv, int expected) {
 }
 
 int main(void) {
+    jobs_init();
     static char *echo_abs[] = { "/bin/echo", "hola", "mundo", NULL };
     static char *echo_path[] = { "echo", "busqueda", "por", "PATH", NULL };
     static char *falso[] = { "false", NULL };
@@ -107,7 +108,7 @@ int main(void) {
     {
         Pipeline vacio = (Pipeline){0};
         int status = -999;
-        int rc = execute_pipeline(&vacio, &status);
+        int rc = execute_pipeline(&vacio, "vacío", &status);
 
         printf("=== 7. pipeline vacio ===\n");
         printf("--> rc=%d status=%d (no se toca) %s\n\n", rc, status, (rc == 0 && status == -999) ? "OK" : "FALLO");
