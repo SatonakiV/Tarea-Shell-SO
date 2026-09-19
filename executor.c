@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "executor.h"
+#include "jobs.h"
 
 static int apply_redirections(const Command *command) {
     for (size_t i = 0; i < command->redir_count; i++) {
@@ -80,6 +81,13 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
     }
 
     if(pid == 0) {
+
+        sigset_t sigchld_mask;
+        sigemptyset(&sigchld_mask);
+        sigaddset(&sigchld_mask, SIGCHLD);
+        sigprocmask(SIG_UNBLOCK, &sigchld_mask, NULL);
+
+
         // el hijo i lee del pipe i-1 y escribe al pipe i
         if (index > 0 && dup2(pipes[index - 1][0], STDIN_FILENO) == -1) {
             perror("mishell: dup2");
@@ -113,32 +121,9 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
     return pid;
 }
 
-static int wait_for_child(pid_t pid) {
-    int status;
 
-    // una senal interrumpe waitpid sin que el hijo haya muerto
-    while(waitpid(pid, &status, 0) == -1) {
-        if(errno == EINTR) {
-            continue;
-        }
 
-        perror("waitpid");
-        
-        return -1;
-    }
-
-    if(WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    }
-
-    if(WIFSIGNALED(status)) {
-        return 128 + WTERMSIG(status);
-    }
-
-    return -1;
-}
-
-int execute_pipeline(const Pipeline *pipeline, int *status) {
+int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     int (*pipes)[2] = NULL;
     pid_t *pids = NULL;
     size_t count;
@@ -152,11 +137,6 @@ int execute_pipeline(const Pipeline *pipeline, int *status) {
         return 0;
     }
 
-    if(pipeline -> background) {
-        fprintf(stderr, "mishell: background todavia no implementado\n");
-
-        return -1;
-    }
 
     count = pipeline -> command_count;
     pipe_count = count - 1;
@@ -205,6 +185,10 @@ int execute_pipeline(const Pipeline *pipeline, int *status) {
     // el hijo hereda una copia del buffer y lo pendiente se imprimiria dos veces
     fflush(NULL);
 
+
+    sigset_t old_mask;
+    jobs_block_sigchld(&old_mask);
+
     for(created = 0; created < count; created++) {
         pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count);
 
@@ -220,20 +204,35 @@ int execute_pipeline(const Pipeline *pipeline, int *status) {
     close_all_pipes(pipes, pipe_count);
     free(pipes);
 
-    for(i = 0; i < created; i++) {
-        int child_code = wait_for_child(pids[i]);
+    int job_id = -1;
+    pid_t last_pid = (created > 0) ? pids[created - 1] : -1;
 
-        if(child_code == -1) {
-            result = -1;
-        }
-        else if(i + 1 == count) {
-            code = child_code;
-        }
+
+
+    if (created > 0) {
+        // Aunque el fork() de algun comando haya fallado a mitad de camino,
+        // igual registramos los que SÍ se crearon para evitar que sus SIGCHLD futuros
+        // no encuentrnen job asociado y nadie espere por ellos.
+        job_id = jobs_add(pids, created, pipeline->background, line);
     }
+
+    jobs_unblock_sigchld(&old_mask);
 
     free(pids);
 
-    if(result == 0 && status != NULL) {
+
+    if (job_id == -1) { return result;}
+
+    if (pipeline->background) {
+        printf("[%d] %d\n", job_id, last_pid);
+        fflush(stdout);
+        return result;
+    }
+
+    // Foreground: duerme hasta que elhandler de sigchild marque este job como terminado
+    code = jobs_wait_foreground(job_id);
+
+    if (status != NULL) {
         *status = code;
     }
 

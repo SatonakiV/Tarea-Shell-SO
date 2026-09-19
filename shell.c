@@ -8,9 +8,11 @@
 
 #include "executor.h"
 #include "shell.h"
+#include "jobs.h"
 
 static void show_prompt(void){
 
+    jobs_notify_done();
     char *directory = getcwd(NULL, 0);
 
     if (directory == NULL) {
@@ -131,6 +133,13 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
         }
         return 1;
     }
+
+     if (strcmp(command->argv[0], "jobs") == 0) {
+        jobs_list();
+        *exit_code = 0;
+        return 1;
+    }
+
     return 0;
 }
 
@@ -139,6 +148,7 @@ int run_shell(void){
     size_t capacity = 0;
     int should_exit = 0;
     int exit_code = 0;
+    jobs_init();
 
     while (!should_exit) {
         int read_status = read_line(&line, &capacity);
@@ -158,7 +168,7 @@ int run_shell(void){
         if (pipeline.command_count != 0 &&
             !handle_builtin(&pipeline, &should_exit, &exit_code)) {
             int status = 0;
-            exit_code = (execute_pipeline(&pipeline, &status) == 0) ? status : 1;
+            exit_code = (execute_pipeline(&pipeline, line, &status) == 0) ? status : 1;
         }
         free_pipeline(&pipeline);
     }
