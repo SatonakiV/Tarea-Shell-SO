@@ -5,7 +5,7 @@
 
 int main(int argc, char *argv[]){
     if (argc != 2) {
-        fprintf(stderr, "Uso: %s <pid>\n", argv[0]);
+        fprintf(stderr, "Uso correcto: %s <pid>\n", argv[0]);
         return 1;
     }
 
@@ -14,7 +14,7 @@ int main(int argc, char *argv[]){
     unsigned long rss_kb;
 
     if (leer_proc_status(pid, &rss_kb) == -1) {
-        fprintf(stderr, "No se pudo leer VmRSS de /proc/%ld/status\n",
+        fprintf(stderr, "Error, no se pudo leer VmRSS de /proc/%ld/status\n",
                 (long)pid);
         return 1;
     }

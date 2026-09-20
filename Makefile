@@ -1,7 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=gnu11
 SANFLAGS = -g -fsanitize=address,undefined
-OBJ = main.o shell.o parser.o executor.o jobs.o
+OBJ = main.o shell.o parser.o executor.o jobs.o pmon.o
 
 .PHONY: all clean test
 

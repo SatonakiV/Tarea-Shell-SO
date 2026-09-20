@@ -21,6 +21,8 @@ int jobs_wait_foreground(int job_id);
 void jobs_list(void);
  
 void jobs_notify_done(void);
+
+int jobs_get_background_pids(pid_t **pids, size_t *count);
  
 #endif
  
