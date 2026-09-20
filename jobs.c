@@ -261,3 +261,64 @@ void jobs_notify_done(void) {
  
     jobs_unblock_sigchld(&old_mask);
 }
+
+// funcion para entregarle a pmon una lista con los PID de los jobs background activos que se deben monitorear
+int jobs_get_background_pids(pid_t **pids, size_t *count){
+
+    if (pids == NULL || count == NULL) {
+        return -1;
+    }
+
+    *pids = NULL;
+    *count = 0;
+
+    sigset_t old_mask;
+    jobs_block_sigchld(&old_mask);
+
+    size_t total = 0;
+
+    // contamos cuantos PID pertenecen a jobs background activos 
+    for (int i = 0; i < JOBS_MAX; i++) {
+
+        if (!jobs[i].active || !jobs[i].background || jobs[i].state != JOB_RUNNING) {
+            continue;
+        }
+
+        total += jobs[i].pid_count;
+    }
+
+    // si no hay procesos activos, no hay nada que copiar
+    if (total == 0) {
+        jobs_unblock_sigchld(&old_mask);
+        return 0;
+    }
+
+    pid_t *copy = malloc(total * sizeof(*copy));
+
+    if (copy == NULL) {
+        jobs_unblock_sigchld(&old_mask);
+        return -1;
+    }
+
+    size_t position = 0;
+
+    // copiamos los PID de todos los jobs background activos
+    for (int i = 0; i < JOBS_MAX; i++) {
+
+        if (!jobs[i].active || !jobs[i].background || jobs[i].state != JOB_RUNNING) {
+            continue;
+        }
+
+        for (size_t j = 0; j < jobs[i].pid_count; j++) {
+            copy[position] = jobs[i].pids[j];
+            position++;
+        }
+    }
+
+    *pids = copy;
+    *count = position;
+
+    jobs_unblock_sigchld(&old_mask);
+
+    return 0;
+}

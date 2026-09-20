@@ -360,6 +360,8 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
             mostrar_fila(&actuales[i], cpu);
         }
 
+        printf("\n");
+
         // las muestras actuales pasan a ser las anteriores para la siguiente actualizacion
         for (size_t i = 0; i < cantidad; i++) {
             anteriores[i] = actuales[i];

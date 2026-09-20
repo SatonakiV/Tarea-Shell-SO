@@ -9,6 +9,7 @@
 #include "executor.h"
 #include "shell.h"
 #include "jobs.h"
+#include "pmon.h"
 
 static void show_prompt(void){
 
@@ -114,6 +115,50 @@ static int builtin_exit(const Command *command, int *should_exit, int *exit_code
     return 0;
 }
 
+static int builtin_pmon(const Command *command){
+
+    if (command->argc > 2) {
+        fprintf(stderr, "uso correcto: pmon [segundos]\n");
+        return 1;
+    }
+
+    unsigned int interval;
+
+    const char *argument = NULL;
+
+    if (command->argc == 2) {
+        argument = command->argv[1];
+    }
+
+    if (get_intervalo_segundos(argument, &interval) == -1) {
+        fprintf(stderr, "pmon: intervalo invalido\n");
+        return 1;
+    }
+
+    pid_t *pids = NULL;
+    size_t count = 0;
+
+    if (jobs_get_background_pids(&pids, &count) == -1) {
+        fprintf(stderr, "pmon: no se pudieron obtener los procesos background\n");
+        return 1;
+    }
+
+    if (count == 0) {
+        printf("pmon: no hay procesos background activos\n");
+        return 0;
+    }
+
+    int status = ejecutar_pmon(pids, count, interval);
+
+    free(pids);
+
+    if (status == -1) {
+        return 1;
+    }
+
+    return 0;
+}
+
 static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_code){
     if (pipeline->command_count != 1 || pipeline->background) {
         return 0;
@@ -134,9 +179,14 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
         return 1;
     }
 
-     if (strcmp(command->argv[0], "jobs") == 0) {
+    if (strcmp(command->argv[0], "jobs") == 0) {
         jobs_list();
         *exit_code = 0;
+        return 1;
+    }
+
+    if (strcmp(command->argv[0], "pmon") == 0) {
+        *exit_code = builtin_pmon(command);
         return 1;
     }
 
