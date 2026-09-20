@@ -54,11 +54,18 @@ static int configurar_SIGINT(struct sigaction *anterior){
 
 // funcion auxiliar para dejar suspendido el proceso mientras se espera que llegue SIGALRM o SIGINT
 static void esperar_actualizacion(){
+    sigset_t mask, oldmask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGALRM);
+    sigaddset(&mask, SIGINT);
+    sigprocmask(SIG_BLOCK, &mask, &oldmask);
 
     // mientras no se solicite actualizar con la alarma o salir de pmon, se mantiene suspendido el proceso
     while(!actualizar && !salir_pmon){
-        pause();
+        sigsuspend(&oldmask); // desbloquea atómicamente y espera
     }
+
+    sigprocmask(SIG_SETMASK, &oldmask, NULL);
 
     if (actualizar) {
         actualizar = 0;

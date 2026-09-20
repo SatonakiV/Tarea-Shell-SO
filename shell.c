@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,38 +160,129 @@ static int builtin_pmon(const Command *command){
     return 0;
 }
 
+// Aplica las redirecciones de un builtin guardando los fd originales para restaurarlos después.
+// Devuelve 0 si todo fue bien, -1 si hubo error (y ya restauró lo que pudo).
+static int apply_builtin_redirections(const Command *command, int saved_fds[], int *saved_count) {
+    *saved_count = 0;
+
+    for (size_t i = 0; i < command->redir_count; i++) {
+        const Redirection *redir = &command->redirs[i];
+        int flags;
+        int target;
+        int fd;
+
+        switch (redir->type) {
+            case REDIR_INPUT:
+                flags = O_RDONLY;
+                target = STDIN_FILENO;
+                break;
+            case REDIR_OUTPUT:
+                flags = O_WRONLY | O_CREAT | O_TRUNC;
+                target = STDOUT_FILENO;
+                break;
+            case REDIR_APPEND:
+                flags = O_WRONLY | O_CREAT | O_APPEND;
+                target = STDOUT_FILENO;
+                break;
+            default:
+                fprintf(stderr, "mishell: tipo de redireccion desconocido\n");
+                return -1;
+        }
+
+        // Guardar el fd original antes de sobreescribirlo (solo la primera vez para cada target)
+        int already_saved = 0;
+        for (int s = 0; s < *saved_count; s += 2) {
+            if (saved_fds[s] == target) {
+                already_saved = 1;
+                break;
+            }
+        }
+        if (!already_saved) {
+            int backup = dup(target);
+            if (backup == -1) {
+                perror("mishell: dup");
+                return -1;
+            }
+            saved_fds[*saved_count] = target;
+            saved_fds[*saved_count + 1] = backup;
+            *saved_count += 2;
+        }
+
+        fd = open(redir->filename, flags, 0644);
+        if (fd == -1) {
+            fprintf(stderr, "mishell: %s: %s\n", redir->filename, strerror(errno));
+            return -1;
+        }
+
+        if (fd != target) {
+            if (dup2(fd, target) == -1) {
+                perror("mishell: dup2");
+                close(fd);
+                return -1;
+            }
+            close(fd);
+        }
+    }
+
+    return 0;
+}
+
+// Restaura los fd originales guardados por apply_builtin_redirections.
+static void restore_builtin_redirections(int saved_fds[], int saved_count) {
+    for (int i = 0; i < saved_count; i += 2) {
+        dup2(saved_fds[i + 1], saved_fds[i]);
+        close(saved_fds[i + 1]);
+    }
+}
+
 static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_code){
+    // Los builtins en pipelines o background se delegan a execute_pipeline
     if (pipeline->command_count != 1 || pipeline->background) {
         return 0;
     }
     const Command *command = &pipeline->commands[0];
+
+    // Aplicar redirecciones si las hay, guardando los fd originales
+    int saved_fds[4]; // máximo 2 targets (stdin + stdout), cada uno ocupa 2 slots
+    int saved_count = 0;
+    int redir_ok = 1;
+
     if (command->redir_count != 0) {
-        return 0;
+        if (apply_builtin_redirections(command, saved_fds, &saved_count) == -1) {
+            // Restaurar lo que se haya podido guardar y reportar error
+            restore_builtin_redirections(saved_fds, saved_count);
+            *exit_code = 1;
+            return 1;
+        }
+        redir_ok = 1;
     }
+
+    int handled = 0;
+
     if (strcmp(command->argv[0], "cd") == 0) {
         *exit_code = builtin_cd(command);
-        return 1;
-    }
-    if (strcmp(command->argv[0], "exit") == 0) {
+        handled = 1;
+    } else if (strcmp(command->argv[0], "exit") == 0) {
         int status = builtin_exit(command, should_exit, exit_code);
         if (!*should_exit) {
             *exit_code = status;
         }
-        return 1;
-    }
-
-    if (strcmp(command->argv[0], "jobs") == 0) {
+        handled = 1;
+    } else if (strcmp(command->argv[0], "jobs") == 0) {
         jobs_list();
         *exit_code = 0;
-        return 1;
-    }
-
-    if (strcmp(command->argv[0], "pmon") == 0) {
+        handled = 1;
+    } else if (strcmp(command->argv[0], "pmon") == 0) {
         *exit_code = builtin_pmon(command);
-        return 1;
+        handled = 1;
     }
 
-    return 0;
+    // Restaurar fd originales si se aplicaron redirecciones
+    if (redir_ok && saved_count > 0) {
+        restore_builtin_redirections(saved_fds, saved_count);
+    }
+
+    return handled;
 }
 
 int run_shell(void){

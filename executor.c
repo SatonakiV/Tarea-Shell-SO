@@ -216,6 +216,30 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
         job_id = jobs_add(pids, created, pipeline->background, line);
     }
 
+    // Si jobs_add falló (tabla llena) y es foreground, esperar directamente con waitpid.
+    // SIGCHLD sigue bloqueado para que el handler no robe los hijos antes de recogerlos.
+    if (job_id == -1 && !pipeline->background && created > 0) {
+        for (size_t i = 0; i < created; i++) {
+            int wstatus;
+            pid_t w;
+            while ((w = waitpid(pids[i], &wstatus, 0)) == -1 && errno == EINTR)
+                ;
+            if (w > 0 && pids[i] == last_pid) {
+                if (WIFEXITED(wstatus)) {
+                    code = WEXITSTATUS(wstatus);
+                } else if (WIFSIGNALED(wstatus)) {
+                    code = 128 + WTERMSIG(wstatus);
+                }
+            }
+        }
+        jobs_unblock_sigchld(&old_mask);
+        free(pids);
+        if (status != NULL) {
+            *status = code;
+        }
+        return result;
+    }
+
     jobs_unblock_sigchld(&old_mask);
 
     free(pids);
