@@ -5,7 +5,7 @@
 
 int main(int argc, char *argv[]){
     if (argc != 2) {
-        fprintf(stderr, "Uso: %s <pid>\n", argv[0]);
+        fprintf(stderr, "Uso correcto: %s <pid>\n", argv[0]);
         return 1;
     }
 
@@ -14,11 +14,12 @@ int main(int argc, char *argv[]){
     ProcStat info;
 
     if (leer_proc_stat(pid, &info) == -1) {
-        fprintf(stderr, "No se pudo leer /proc/%ld/stat\n", (long)pid);
+        fprintf(stderr, "Error, no se pudo leer /proc/%ld/stat\n", (long)pid);
         return 1;
     }
 
     printf("PID: %ld\n", (long)pid);
+    printf("Comando: %s\n", info.comando);
     printf("Estado: %c\n", info.state);
     printf("utime: %lu\n", info.utime);
     printf("stime: %lu\n", info.stime);

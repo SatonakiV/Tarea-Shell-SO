@@ -5,6 +5,7 @@
 #include <time.h>
 
 typedef struct {
+    char comando[256];
     char state;
     unsigned long utime;
     unsigned long stime;
@@ -12,6 +13,7 @@ typedef struct {
 
 typedef struct {
     pid_t pid;
+    char comando[256];
     char state;
     unsigned long cpu_ticks;
     unsigned long rss_kb;
@@ -28,5 +30,7 @@ double calcular_dif_tiempo(struct timespec anterior, struct timespec actual);
 
 
 int get_intervalo_segundos(const char *argumento, unsigned int *intervalo);
+
+int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo);
 
 #endif
