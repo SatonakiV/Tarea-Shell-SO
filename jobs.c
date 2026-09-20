@@ -158,6 +158,14 @@ int jobs_add(const pid_t *pids, size_t pid_count, int background, const char *co
  
     pid_t *pids_copy = malloc(pid_count * sizeof(*pids_copy));
     char *line_copy = strdup(command_line != NULL ? command_line : "");
+
+    // Eliminar el \n que getline() deja al final de la linea
+    if (line_copy != NULL) {
+        size_t len = strlen(line_copy);
+        while (len > 0 && (line_copy[len - 1] == '\n' || line_copy[len - 1] == '\r')) {
+            line_copy[--len] = '\0';
+        }
+    }
  
     if (pids_copy == NULL || line_copy == NULL) {
         free(pids_copy);
