@@ -2,6 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=gnu11
 SANFLAGS = -g -fsanitize=address,undefined
 OBJ = main.o shell.o parser.o executor.o jobs.o pmon.o
+HDRS = shell.h executor.h jobs.h pmon.h
 
 .PHONY: all clean test san
 
@@ -10,7 +11,7 @@ all: mishell
 mishell: $(OBJ)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-%.o: %.c shell.h executor.h jobs.h
+%.o: %.c $(HDRS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 clean:
@@ -19,7 +20,7 @@ clean:
 test: test_exec test_suicida
 	./test_exec
 
-test_exec: test_exec.c executor.c jobs.c executor.h shell.h jobs.h
+test_exec: test_exec.c executor.c jobs.c $(HDRS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -o $@ test_exec.c executor.c jobs.c
 
 test_suicida: test_suicida.c
