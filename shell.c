@@ -60,8 +60,6 @@ static int install_signal_handlers(void){
 
 static void show_prompt(void){
 
-    jobs_notify_done();
-
     char *directory = getcwd(NULL, 0);
 
     if (directory == NULL) {
@@ -301,6 +299,10 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
     int redir_ok = 1;
 
     if (command->redir_count != 0) {
+        // Vaciar lo que quede pendiente ANTES de mover stdout: si no, esa salida
+        // previa se escribiria dentro del archivo de la redireccion.
+        fflush(stdout);
+
         if (apply_builtin_redirections(command, saved_fds, &saved_count) == -1) {
             // Restaurar lo que se haya podido guardar y reportar error
             restore_builtin_redirections(saved_fds, saved_count);
@@ -332,6 +334,7 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
 
     // Restaurar fd originales si se aplicaron redirecciones
     if (redir_ok && saved_count > 0) {
+        fflush(stdout);
         restore_builtin_redirections(saved_fds, saved_count);
     }
 
@@ -347,6 +350,8 @@ int run_shell(void){
     jobs_init();
 
     while (!should_exit) {
+        jobs_notify_done();
+
         int read_status = read_line(&line, &capacity);
         if (read_status <= 0) {
             if (read_status < 0) {
