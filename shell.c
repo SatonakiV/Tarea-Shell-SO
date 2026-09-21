@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,9 +13,55 @@
 #include "jobs.h"
 #include "pmon.h"
 
+// la shell debe sobrevivir a Ctrl+C
+static volatile sig_atomic_t interrupted = 0;
+
+static void sigint_handler(int signal_number){
+    (void)signal_number;
+    interrupted = 1;
+}
+
+// SIGINT se atrapa y SIGQUIT se ignora
+// se instalan una sola vez al arrancar la shell y los hijos los ajustan antes de execvp()
+static int install_signal_handlers(void){
+    struct sigaction catch_sigint;
+
+    memset(&catch_sigint, 0, sizeof(catch_sigint));
+    
+    catch_sigint.sa_handler = sigint_handler;
+    
+    sigemptyset(&catch_sigint.sa_mask);
+    // sin SA_RESTART a proposito: queremos que getline() vuelva con EINTR para redibujar el prompt
+    catch_sigint.sa_flags = 0;
+
+    if (sigaction(SIGINT, &catch_sigint, NULL) == -1) {
+        perror("mishell: sigaction(SIGINT)");
+        return -1;
+    }
+
+    struct sigaction ignore_sigquit;
+    
+    memset(&ignore_sigquit, 0, sizeof(ignore_sigquit));
+    
+    ignore_sigquit.sa_handler = SIG_IGN;
+    
+    sigemptyset(&ignore_sigquit.sa_mask);
+    
+    ignore_sigquit.sa_flags = 0;
+
+    if (sigaction(SIGQUIT, &ignore_sigquit, NULL) == -1) {
+        perror("mishell: sigaction(SIGQUIT)");
+
+        return -1;
+    }
+
+    return 0;
+}
+
 static void show_prompt(void){
 
     jobs_notify_done();
+
     char *directory = getcwd(NULL, 0);
 
     if (directory == NULL) {
@@ -33,6 +80,12 @@ static int read_line(char **line, size_t *capacity){
 
     for (;;) {
         if (interactive) {
+            // el terminal ya hizo eco de "^C" sin salto de linea, se cierra para que el prompt no quede pegado a el
+            if (interrupted) {
+                interrupted = 0;
+                
+                putchar('\n');
+            }
             show_prompt();
         }
 
@@ -290,6 +343,7 @@ int run_shell(void){
     size_t capacity = 0;
     int should_exit = 0;
     int exit_code = 0;
+    install_signal_handlers();
     jobs_init();
 
     while (!should_exit) {

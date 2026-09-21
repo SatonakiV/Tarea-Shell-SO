@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,7 +72,22 @@ static void close_all_pipes(int (*pipes)[2], size_t count) {
     }
 }
 
-static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count) {
+static void set_child_signals(int background) {
+    struct sigaction sa;
+    
+    memset(&sa, 0, sizeof(sa));
+
+    sa.sa_handler = background ? SIG_IGN : SIG_DFL;
+
+    sigemptyset(&sa.sa_mask);
+    
+    sa.sa_flags = 0;
+
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGQUIT, &sa, NULL);
+}
+
+static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, int background) {
     pid_t pid = fork();
 
     if(pid == -1) {
@@ -86,6 +102,8 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
         sigemptyset(&sigchld_mask);
         sigaddset(&sigchld_mask, SIGCHLD);
         sigprocmask(SIG_UNBLOCK, &sigchld_mask, NULL);
+
+        set_child_signals(background);
 
 
         // el hijo i lee del pipe i-1 y escribe al pipe i
@@ -190,7 +208,8 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     jobs_block_sigchld(&old_mask);
 
     for(created = 0; created < count; created++) {
-        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count);
+        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count,
+                                      pipeline -> background);
 
         if(pids[created] == -1) {
             result = -1;
