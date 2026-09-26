@@ -11,6 +11,17 @@
 
 #include "executor.h"
 #include "jobs.h"
+#include "shell.h"
+
+static volatile sig_atomic_t foreground_pgid = 0;
+
+void executor_set_foreground_pgid(pid_t pgid) {
+    foreground_pgid = (sig_atomic_t)pgid;
+}
+
+pid_t executor_get_foreground_pgid(void) {
+    return (pid_t)foreground_pgid;
+}
 
 static int apply_redirections(const Command *command) {
     for (size_t i = 0; i < command->redir_count; i++) {
@@ -72,12 +83,12 @@ static void close_all_pipes(int (*pipes)[2], size_t count) {
     }
 }
 
-static void set_child_signals(int background) {
+static void set_child_signals(void) {
     struct sigaction sa;
     
     memset(&sa, 0, sizeof(sa));
 
-    sa.sa_handler = background ? SIG_IGN : SIG_DFL;
+    sa.sa_handler = SIG_DFL;
 
     sigemptyset(&sa.sa_mask);
     
@@ -87,7 +98,7 @@ static void set_child_signals(int background) {
     sigaction(SIGQUIT, &sa, NULL);
 }
 
-static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, int background) {
+static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, pid_t pgid) {
     pid_t pid = fork();
 
     if(pid == -1) {
@@ -98,12 +109,17 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
 
     if(pid == 0) {
 
+        if (setpgid(0, pgid == 0 ? 0 : pgid) == -1) {
+            perror("mishell: setpgid");
+            _exit(1);
+        }
+
         sigset_t sigchld_mask;
         sigemptyset(&sigchld_mask);
         sigaddset(&sigchld_mask, SIGCHLD);
         sigprocmask(SIG_UNBLOCK, &sigchld_mask, NULL);
 
-        set_child_signals(background);
+        set_child_signals();
 
 
         // el hijo i lee del pipe i-1 y escribe al pipe i
@@ -207,14 +223,24 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     sigset_t old_mask;
     jobs_block_sigchld(&old_mask);
 
+    pid_t pgid = 0;
+
     for(created = 0; created < count; created++) {
-        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count,
-                                      pipeline -> background);
+        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count, pgid);
 
         if(pids[created] == -1) {
-            result = -1;
+            result = -2;
 
             break;
+        }
+        if (pgid == 0) {
+            pgid = pids[created];
+            if (!pipeline->background) {
+                executor_set_foreground_pgid(pgid);
+            }
+        }
+        if (setpgid(pids[created], pgid) == -1 && errno != EACCES && errno != ESRCH) {
+            perror("mishell: setpgid");
         }
     }
 
@@ -222,6 +248,20 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     // comando nunca recibiria EOF porque la shell seguiria siendo un escritor vivo
     close_all_pipes(pipes, pipe_count);
     free(pipes);
+
+    if (result == -2) {
+        if (created > 0) {
+            kill(-pgid, SIGTERM);
+            for (size_t j = 0; j < created; j++) {
+                while (waitpid(pids[j], NULL, 0) == -1 && errno == EINTR) {
+                }
+            }
+        }
+        executor_set_foreground_pgid(0);
+        jobs_unblock_sigchld(&old_mask);
+        free(pids);
+        return -2;
+    }
 
     int job_id = -1;
     pid_t last_pid = (created > 0) ? pids[created - 1] : -1;
@@ -252,6 +292,7 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
             }
         }
         jobs_unblock_sigchld(&old_mask);
+        executor_set_foreground_pgid(0);
         free(pids);
         if (status != NULL) {
             *status = code;
@@ -259,12 +300,22 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
         return result;
     }
 
+    if (job_id == -1) {
+        if (created > 0) {
+            fprintf(stderr, "mishell: no se pudo registrar el trabajo background\n");
+            kill(-pgid, SIGTERM);
+            for (size_t j = 0; j < created; j++) {
+                while (waitpid(pids[j], NULL, 0) == -1 && errno == EINTR) {
+                }
+            }
+        }
+        jobs_unblock_sigchld(&old_mask);
+        free(pids);
+        return -1;
+    }
+
     jobs_unblock_sigchld(&old_mask);
-
     free(pids);
-
-
-    if (job_id == -1) { return result;}
 
     if (pipeline->background) {
         printf("[%d] %d\n", job_id, last_pid);
@@ -274,6 +325,7 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
     // Foreground: duerme hasta que elhandler de sigchild marque este job como terminado
     code = jobs_wait_foreground(job_id);
+    executor_set_foreground_pgid(0);
 
     if (status != NULL) {
         *status = code;

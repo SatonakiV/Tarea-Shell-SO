@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <signal.h>
+#include <errno.h>
 
 #include "pmon.h"
 
@@ -236,7 +237,7 @@ double calcular_cpu(unsigned long ticks_anterior, unsigned long ticks_actual,dou
     long ticks_por_segundo = sysconf(_SC_CLK_TCK);
 
     // evitar hacer calculo invalido
-    if (ticks_por_segundo <= 0 || dif_tiempo <= 0.0) {
+    if (ticks_por_segundo <= 0 || dif_tiempo <= 0.0 || ticks_actual < ticks_anterior) {
         return 0.0;
     }
 
@@ -267,9 +268,10 @@ int get_intervalo_segundos(const char *argumento, unsigned int *intervalo){
     }
 
     char *fin;
+    errno = 0;
     long valor = strtol(argumento, &fin, 10);
 
-    if (argumento == fin || *fin != '\0' || valor <= 0 || valor > UINT_MAX) {
+    if (errno == ERANGE || argumento == fin || *fin != '\0' || valor <= 0 || valor > UINT_MAX) {
         return -1;
     }
 
@@ -285,7 +287,8 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
         return -1;
     }
 
-    if (configurar_SIGALRM() == -1) {
+    struct sigaction sigalrm_anterior;
+    if (sigaction(SIGALRM, NULL, &sigalrm_anterior) == -1 || configurar_SIGALRM() == -1) {
         return -1;
     }
 
@@ -293,11 +296,13 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
     struct sigaction sigint_anterior;
 
     if (configurar_SIGINT(&sigint_anterior) == -1) {
+        sigaction(SIGALRM, &sigalrm_anterior, NULL);
         return -1;
     }
 
     // inicializamos la flag para salir en 0
     salir_pmon = 0;
+    actualizar = 0;
 
     MuestraProceso anteriores[cantidad];
 
@@ -383,6 +388,7 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
 
     // restauramos el comportamiento inicial de SIGINT previo a pmon
     sigaction(SIGINT, &sigint_anterior, NULL);
+    sigaction(SIGALRM, &sigalrm_anterior, NULL);
 
     return 0;
 }
