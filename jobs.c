@@ -110,7 +110,7 @@ void jobs_init(void) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigchld_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = 0;
  
     if (sigaction(SIGCHLD, &sa, NULL) == -1) {
         perror("mishell: sigaction(SIGCHLD)");

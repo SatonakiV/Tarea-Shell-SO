@@ -19,10 +19,22 @@ static volatile sig_atomic_t interrupted = 0;
 static void sigint_handler(int signal_number){
     (void)signal_number;
     interrupted = 1;
+    pid_t pgid = executor_get_foreground_pgid();
+    if (pgid > 0) {
+        kill(-pgid, SIGINT);
+    }
 }
 
-// SIGINT se atrapa y SIGQUIT se ignora
-// se instalan una sola vez al arrancar la shell y los hijos los ajustan antes de execvp()
+static void sigquit_handler(int signal_number) {
+    (void)signal_number;
+    pid_t pgid = executor_get_foreground_pgid();
+    if (pgid > 0) {
+        kill(-pgid, SIGQUIT);
+    }
+}
+
+// La shell captura SIGINT y SIGQUIT para reenviarlas al grupo foreground.
+// Los hijos restauran las disposiciones por defecto antes de execvp().
 static int install_signal_handlers(void){
     struct sigaction catch_sigint;
 
@@ -43,7 +55,7 @@ static int install_signal_handlers(void){
     
     memset(&ignore_sigquit, 0, sizeof(ignore_sigquit));
     
-    ignore_sigquit.sa_handler = SIG_IGN;
+    ignore_sigquit.sa_handler = sigquit_handler;
     
     sigemptyset(&ignore_sigquit.sa_mask);
     
@@ -95,8 +107,8 @@ static int read_line(char **line, size_t *capacity){
         }
 
         if (errno == EINTR) {
-
             clearerr(stdin);
+            jobs_notify_done();
             continue;
         }
 
@@ -293,10 +305,16 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
     }
     const Command *command = &pipeline->commands[0];
 
+    if (strcmp(command->argv[0], "cd") != 0 &&
+        strcmp(command->argv[0], "exit") != 0 &&
+        strcmp(command->argv[0], "jobs") != 0 &&
+        strcmp(command->argv[0], "pmon") != 0) {
+        return 0;
+    }
+
     // Aplicar redirecciones si las hay, guardando los fd originales
     int saved_fds[4]; // máximo 2 targets (stdin + stdout), cada uno ocupa 2 slots
     int saved_count = 0;
-    int redir_ok = 1;
 
     if (command->redir_count != 0) {
         // Vaciar lo que quede pendiente ANTES de mover stdout: si no, esa salida
@@ -309,7 +327,6 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
             *exit_code = 1;
             return 1;
         }
-        redir_ok = 1;
     }
 
     int handled = 0;
@@ -333,7 +350,7 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
     }
 
     // Restaurar fd originales si se aplicaron redirecciones
-    if (redir_ok && saved_count > 0) {
+    if (saved_count > 0) {
         fflush(stdout);
         restore_builtin_redirections(saved_fds, saved_count);
     }
@@ -346,7 +363,9 @@ int run_shell(void){
     size_t capacity = 0;
     int should_exit = 0;
     int exit_code = 0;
-    install_signal_handlers();
+    if (install_signal_handlers() == -1) {
+        return 1;
+    }
     jobs_init();
 
     while (!should_exit) {
@@ -369,7 +388,11 @@ int run_shell(void){
         if (pipeline.command_count != 0 &&
             !handle_builtin(&pipeline, &should_exit, &exit_code)) {
             int status = 0;
-            exit_code = (execute_pipeline(&pipeline, line, &status) == 0) ? status : 1;
+            int result = execute_pipeline(&pipeline, line, &status);
+            exit_code = result == 0 ? status : 1;
+            if (result == -2) {
+                should_exit = 1;
+            }
         }
         free_pipeline(&pipeline);
     }
