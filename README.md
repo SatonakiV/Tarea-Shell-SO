@@ -30,7 +30,7 @@ Una vez compilado el proyecto, ejecutar
 ./mishell
 ```
 
-Y para eliminar los archivos generados por la ejecución
+Y para eliminar los archivos generados por la compilación
 
 ```bash
 make clean
