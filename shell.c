@@ -13,8 +13,8 @@
 #include "jobs.h"
 #include "pmon.h"
 
-// La shell ignora SIGINT y SIGQUIT, como pide R6.
-// Los hijos restauran las disposiciones por defecto antes de execvp().
+// La shell ignora SIGINT y SIGQUIT, como pide R6 (SIGTSTP, SIGTTIN y SIGTTOU los ignora
+// jobs_init() cuando hay control de jobs). Los hijos restauran las disposiciones por defecto antes de execvp().
 static int install_signal_handlers(void){
     struct sigaction ignore_signal = {0};
     ignore_signal.sa_handler = SIG_IGN;
@@ -193,6 +193,22 @@ static int builtin_pmon(const Command *command){
     return 0;
 }
 
+// fg [n] y bg [n] (bonus): reanudan un job detenido en primer o segundo plano. n puede ir como "%n"
+static int builtin_fg_bg(const Command *command){
+    if (command->argc > 2) {
+        fprintf(stderr, "uso correcto: %s [n]\n", command->argv[0]);
+        return 1;
+    }
+
+    const char *argument = command->argc == 2 ? command->argv[1] : NULL;
+
+    if (strcmp(command->argv[0], "fg") == 0) {
+        return jobs_fg(argument);
+    }
+
+    return jobs_bg(argument);
+}
+
 // Aplica las redirecciones de un builtin guardando los fd originales para restaurarlos después.
 // Devuelve 0 si todo fue bien, -1 si hubo error (y ya restauró lo que pudo).
 static int apply_builtin_redirections(const Command *command, int saved_fds[], int *saved_count) {
@@ -278,7 +294,9 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
     if (strcmp(command->argv[0], "cd") != 0 &&
         strcmp(command->argv[0], "exit") != 0 &&
         strcmp(command->argv[0], "jobs") != 0 &&
-        strcmp(command->argv[0], "pmon") != 0) {
+        strcmp(command->argv[0], "pmon") != 0 &&
+        strcmp(command->argv[0], "fg") != 0 &&
+        strcmp(command->argv[0], "bg") != 0) {
         return 0;
     }
 
@@ -316,6 +334,9 @@ static int handle_builtin(const Pipeline *pipeline, int *should_exit, int *exit_
         handled = 1;
     } else if (strcmp(command->argv[0], "pmon") == 0) {
         *exit_code = builtin_pmon(command);
+        handled = 1;
+    } else if (strcmp(command->argv[0], "fg") == 0 || strcmp(command->argv[0], "bg") == 0) {
+        *exit_code = builtin_fg_bg(command);
         handled = 1;
     }
 
