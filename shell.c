@@ -13,57 +13,37 @@
 #include "jobs.h"
 #include "pmon.h"
 
-// la shell debe sobrevivir a Ctrl+C
+// la shell debe sobrevivir a Ctrl+C y Ctrl+\ (SIGINT y SIGQUIT)
 static volatile sig_atomic_t interrupted = 0;
 
-static void sigint_handler(int signal_number){
+// Un pipeline foreground comparte el grupo de la shell, asi que la terminal le entrega Ctrl+C y
+// Ctrl+\ directamente a sus procesos (que las tienen en SIG_DFL). La shell solo las atrapa para no
+// morir y anota que hay que cerrar la linea donde la terminal hizo eco de "^C" o "^\"
+static void interrupt_handler(int signal_number){
     (void)signal_number;
     interrupted = 1;
-    pid_t pgid = executor_get_foreground_pgid();
-    if (pgid > 0) {
-        kill(-pgid, SIGINT);
-    }
 }
 
-static void sigquit_handler(int signal_number) {
-    (void)signal_number;
-    pid_t pgid = executor_get_foreground_pgid();
-    if (pgid > 0) {
-        kill(-pgid, SIGQUIT);
-    }
-}
-
-// La shell captura SIGINT y SIGQUIT para reenviarlas al grupo foreground.
+// La shell captura SIGINT y SIGQUIT con el mismo handler.
 // Los hijos restauran las disposiciones por defecto antes de execvp().
 static int install_signal_handlers(void){
-    struct sigaction catch_sigint;
+    struct sigaction sa;
 
-    memset(&catch_sigint, 0, sizeof(catch_sigint));
-    
-    catch_sigint.sa_handler = sigint_handler;
-    
-    sigemptyset(&catch_sigint.sa_mask);
+    memset(&sa, 0, sizeof(sa));
+
+    sa.sa_handler = interrupt_handler;
+
+    sigemptyset(&sa.sa_mask);
     // sin SA_RESTART a proposito: queremos que getline() vuelva con EINTR para redibujar el prompt
-    catch_sigint.sa_flags = 0;
+    sa.sa_flags = 0;
 
-    if (sigaction(SIGINT, &catch_sigint, NULL) == -1) {
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
         perror("mishell: sigaction(SIGINT)");
         return -1;
     }
 
-    struct sigaction ignore_sigquit;
-    
-    memset(&ignore_sigquit, 0, sizeof(ignore_sigquit));
-    
-    ignore_sigquit.sa_handler = sigquit_handler;
-    
-    sigemptyset(&ignore_sigquit.sa_mask);
-    
-    ignore_sigquit.sa_flags = 0;
-
-    if (sigaction(SIGQUIT, &ignore_sigquit, NULL) == -1) {
+    if (sigaction(SIGQUIT, &sa, NULL) == -1) {
         perror("mishell: sigaction(SIGQUIT)");
-
         return -1;
     }
 
@@ -89,13 +69,20 @@ static int read_line(char **line, size_t *capacity){
     int interactive = isatty(STDIN_FILENO);
 
     for (;;) {
-        if (interactive) {
-            // el terminal ya hizo eco de "^C" sin salto de linea, se cierra para que el prompt no quede pegado a el
-            if (interrupted) {
-                interrupted = 0;
-                
+        // el terminal ya hizo eco de "^C" o "^\" sin salto de linea: se cierra antes de los
+        // avisos y del prompt para que no queden pegados a el
+        if (interrupted) {
+            interrupted = 0;
+
+            if (interactive) {
                 putchar('\n');
             }
+        }
+
+        // los avisos de jobs background terminados salen justo antes del prompt
+        jobs_notify_done();
+
+        if (interactive) {
             show_prompt();
         }
 
@@ -103,12 +90,16 @@ static int read_line(char **line, size_t *capacity){
         ssize_t length = getline(line, capacity, stdin);
 
         if (length >= 0) {
+            // si una senal corta la lectura a mitad de linea, getline() devuelve el trozo leido y
+            // deja stdin marcado con error: sin limpiarlo, la siguiente lectura fallaria de inmediato
+            if (ferror(stdin)) {
+                clearerr(stdin);
+            }
             return 1;
         }
 
         if (errno == EINTR) {
             clearerr(stdin);
-            jobs_notify_done();
             continue;
         }
 
@@ -143,7 +134,7 @@ static int builtin_cd(const Command *command){
     }
 
     if (chdir(directory) == -1) {
-        perror("cd");
+        fprintf(stderr, "cd: %s: %s\n", directory, strerror(errno));
         return 1;
     }
 
@@ -219,6 +210,10 @@ static int builtin_pmon(const Command *command){
     if (status == -1) {
         return 1;
     }
+
+    // pmon solo termina con Ctrl+C, pero con su propio handler: se marca aqui para que los
+    // avisos y el prompt no queden pegados al "^C"
+    interrupted = 1;
 
     return 0;
 }
@@ -369,13 +364,13 @@ int run_shell(void){
     jobs_init();
 
     while (!should_exit) {
-        jobs_notify_done();
-
+        // read_line() muestra los avisos de jobs terminados antes de cada prompt
         int read_status = read_line(&line, &capacity);
         if (read_status <= 0) {
             if (read_status < 0) {
                 exit_code = 1;
             }
+            
             break;
         }
         Pipeline pipeline;
