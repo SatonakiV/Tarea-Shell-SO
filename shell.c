@@ -13,55 +13,20 @@
 #include "jobs.h"
 #include "pmon.h"
 
-// la shell debe sobrevivir a Ctrl+C
-static volatile sig_atomic_t interrupted = 0;
-
-static void sigint_handler(int signal_number){
-    (void)signal_number;
-    interrupted = 1;
-    pid_t pgid = executor_get_foreground_pgid();
-    if (pgid > 0) {
-        kill(-pgid, SIGINT);
-    }
-}
-
-static void sigquit_handler(int signal_number) {
-    (void)signal_number;
-    pid_t pgid = executor_get_foreground_pgid();
-    if (pgid > 0) {
-        kill(-pgid, SIGQUIT);
-    }
-}
-
-// La shell captura SIGINT y SIGQUIT para reenviarlas al grupo foreground.
+// La shell ignora SIGINT y SIGQUIT, como pide R6.
 // Los hijos restauran las disposiciones por defecto antes de execvp().
 static int install_signal_handlers(void){
-    struct sigaction catch_sigint;
+    struct sigaction ignore_signal = {0};
+    ignore_signal.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_signal.sa_mask);
+    ignore_signal.sa_flags = 0;
 
-    memset(&catch_sigint, 0, sizeof(catch_sigint));
-    
-    catch_sigint.sa_handler = sigint_handler;
-    
-    sigemptyset(&catch_sigint.sa_mask);
-    // sin SA_RESTART a proposito: queremos que getline() vuelva con EINTR para redibujar el prompt
-    catch_sigint.sa_flags = 0;
-
-    if (sigaction(SIGINT, &catch_sigint, NULL) == -1) {
+    if (sigaction(SIGINT, &ignore_signal, NULL) == -1) {
         perror("mishell: sigaction(SIGINT)");
         return -1;
     }
 
-    struct sigaction ignore_sigquit;
-    
-    memset(&ignore_sigquit, 0, sizeof(ignore_sigquit));
-    
-    ignore_sigquit.sa_handler = sigquit_handler;
-    
-    sigemptyset(&ignore_sigquit.sa_mask);
-    
-    ignore_sigquit.sa_flags = 0;
-
-    if (sigaction(SIGQUIT, &ignore_sigquit, NULL) == -1) {
+    if (sigaction(SIGQUIT, &ignore_signal, NULL) == -1) {
         perror("mishell: sigaction(SIGQUIT)");
 
         return -1;
@@ -90,12 +55,6 @@ static int read_line(char **line, size_t *capacity){
 
     for (;;) {
         if (interactive) {
-            // el terminal ya hizo eco de "^C" sin salto de linea, se cierra para que el prompt no quede pegado a el
-            if (interrupted) {
-                interrupted = 0;
-                
-                putchar('\n');
-            }
             show_prompt();
         }
 

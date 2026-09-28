@@ -357,6 +357,11 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
         // calculamos cuanto tiempo paso entre ambas muestras en segundos
         double dif_tiempo = calcular_dif_tiempo(tiempo_anterior, tiempo_actual);
 
+        // Redibujar la pantalla sin invocar comandos externos.
+        // Si stdout es un archivo, conservar las muestras sin escapes de terminal.
+        if (isatty(STDOUT_FILENO)) {
+            printf("\033[2J\033[H");
+        }
         mostrar_titulos();
 
         // calculamos y mostramos el %CPU de cada proceso valido
@@ -373,6 +378,7 @@ int ejecutar_pmon(pid_t pids[], size_t cantidad, unsigned int intervalo){
         }
 
         printf("\n");
+        fflush(stdout);
 
         // las muestras actuales pasan a ser las anteriores para la siguiente actualizacion
         for (size_t i = 0; i < cantidad; i++) {

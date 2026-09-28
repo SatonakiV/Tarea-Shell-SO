@@ -13,16 +13,6 @@
 #include "jobs.h"
 #include "shell.h"
 
-static volatile sig_atomic_t foreground_pgid = 0;
-
-void executor_set_foreground_pgid(pid_t pgid) {
-    foreground_pgid = (sig_atomic_t)pgid;
-}
-
-pid_t executor_get_foreground_pgid(void) {
-    return (pid_t)foreground_pgid;
-}
-
 static int apply_redirections(const Command *command) {
     for (size_t i = 0; i < command->redir_count; i++) {
         const Redirection *redir = &command->redirs[i];
@@ -98,7 +88,7 @@ static void set_child_signals(void) {
     sigaction(SIGQUIT, &sa, NULL);
 }
 
-static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, pid_t pgid) {
+static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, int background, pid_t pgid) {
     pid_t pid = fork();
 
     if(pid == -1) {
@@ -109,7 +99,9 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
 
     if(pid == 0) {
 
-        if (setpgid(0, pgid == 0 ? 0 : pgid) == -1) {
+        // El foreground conserva el grupo de la shell para poder leer la terminal.
+        // Solo el background se aisla de las senales enviadas por la terminal.
+        if (background && setpgid(0, pgid == 0 ? 0 : pgid) == -1) {
             perror("mishell: setpgid");
             _exit(1);
         }
@@ -226,21 +218,20 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     pid_t pgid = 0;
 
     for(created = 0; created < count; created++) {
-        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count, pgid);
+        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count, pipeline->background, pgid);
 
         if(pids[created] == -1) {
             result = -2;
 
             break;
         }
-        if (pgid == 0) {
-            pgid = pids[created];
-            if (!pipeline->background) {
-                executor_set_foreground_pgid(pgid);
+        if (pipeline->background) {
+            if (pgid == 0) {
+                pgid = pids[created];
             }
-        }
-        if (setpgid(pids[created], pgid) == -1 && errno != EACCES && errno != ESRCH) {
-            perror("mishell: setpgid");
+            if (setpgid(pids[created], pgid) == -1 && errno != EACCES && errno != ESRCH) {
+                perror("mishell: setpgid");
+            }
         }
     }
 
@@ -251,13 +242,15 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
     if (result == -2) {
         if (created > 0) {
-            kill(-pgid, SIGTERM);
+            // El foreground comparte grupo con la shell: terminar solo sus hijos.
+            for (size_t j = 0; j < created; j++) {
+                kill(pids[j], SIGTERM);
+            }
             for (size_t j = 0; j < created; j++) {
                 while (waitpid(pids[j], NULL, 0) == -1 && errno == EINTR) {
                 }
             }
         }
-        executor_set_foreground_pgid(0);
         jobs_unblock_sigchld(&old_mask);
         free(pids);
         return -2;
@@ -269,9 +262,7 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
 
     if (created > 0) {
-        // Aunque el fork() de algun comando haya fallado a mitad de camino,
-        // igual registramos los que SÍ se crearon para evitar que sus SIGCHLD futuros
-        // no encuentrnen job asociado y nadie espere por ellos.
+        // Registrar todos los hijos antes de desbloquear SIGCHLD.
         job_id = jobs_add(pids, created, pipeline->background, line);
     }
 
@@ -292,7 +283,6 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
             }
         }
         jobs_unblock_sigchld(&old_mask);
-        executor_set_foreground_pgid(0);
         free(pids);
         if (status != NULL) {
             *status = code;
@@ -325,7 +315,6 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
     // Foreground: duerme hasta que elhandler de sigchild marque este job como terminado
     code = jobs_wait_foreground(job_id);
-    executor_set_foreground_pgid(0);
 
     if (status != NULL) {
         *status = code;
