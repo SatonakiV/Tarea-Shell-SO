@@ -2,7 +2,6 @@
 #define EXECUTOR_H
 
 #include "shell.h"
-#include <sys/types.h>
 
 #define EXEC_CANNOT_EXECUTE 126
 #define EXEC_NOT_FOUND 127

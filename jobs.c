@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
  
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,13 +23,13 @@ typedef struct {
     size_t pending;               
     volatile sig_atomic_t state;  
     int exit_code;                
+    int term_signal;              // senal que mato al ultimo comando (0 si termino con exit)
     int background;
     int notified;                 
     char *command_line;
 } Job;
  
 static Job jobs[JOBS_MAX];
-static int next_job_id = 1;
  
 
 
@@ -55,6 +56,18 @@ static Job *find_job_by_id(int id) {
         }
     }
     return NULL;
+}
+
+// como bash: el numero de un job nuevo es el mayor en uso + 1. Los foreground se liberan apenas
+// terminan, asi que no gastan numeros y los ids vuelven a partir de 1 cuando no quedan jobs
+static int new_job_id(void) {
+    int max_id = 0;
+    for (int i = 0; i < JOBS_MAX; i++) {
+        if (jobs[i].active && jobs[i].id > max_id) {
+            max_id = jobs[i].id;
+        }
+    }
+    return max_id + 1;
 }
  
 
@@ -90,6 +103,7 @@ static void sigchld_handler(int sig) {
         //(cmdN de cmd1|cmd2|...|cmdN-->ultimo de salida)
         if (pid == job->pids[job->pid_count - 1]) {
             job->exit_code = code;
+            job->term_signal = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
         }
  
         if (job->pending == 0) {
@@ -110,7 +124,10 @@ void jobs_init(void) {
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sigchld_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    // SA_RESTART: que un hijo termine no debe cortar las llamadas de la shell. Asi getline() no
+    // vuelve con EINTR (ni con media linea) mientras se espera un comando, y el aviso Done sale
+    // con el proximo prompt. La espera del foreground igual despierta: sigsuspend() nunca se reinicia
+    sa.sa_flags = SA_RESTART;
  
     if (sigaction(SIGCHLD, &sa, NULL) == -1) {
         perror("mishell: sigaction(SIGCHLD)");
@@ -159,11 +176,18 @@ int jobs_add(const pid_t *pids, size_t pid_count, int background, const char *co
     pid_t *pids_copy = malloc(pid_count * sizeof(*pids_copy));
     char *line_copy = strdup(command_line != NULL ? command_line : "");
 
-    // Eliminar el \n que getline() deja al final de la linea
+    // Eliminar el \n que getline() deja al final de la linea y los espacios sobrantes. En background
+    // tambien el '&' final (el parser garantiza que es lo ultimo): jobs y Done muestran "sleep 30"
     if (line_copy != NULL) {
         size_t len = strlen(line_copy);
-        while (len > 0 && (line_copy[len - 1] == '\n' || line_copy[len - 1] == '\r')) {
+        while (len > 0 && isspace((unsigned char)line_copy[len - 1])) {
             line_copy[--len] = '\0';
+        }
+        if (background && len > 0 && line_copy[len - 1] == '&') {
+            line_copy[--len] = '\0';
+            while (len > 0 && isspace((unsigned char)line_copy[len - 1])) {
+                line_copy[--len] = '\0';
+            }
         }
     }
  
@@ -175,13 +199,14 @@ int jobs_add(const pid_t *pids, size_t pid_count, int background, const char *co
  
     memcpy(pids_copy, pids, pid_count * sizeof(*pids_copy));
  
-    slot->id = next_job_id++;
+    slot->id = new_job_id();
     slot->active = 1;
     slot->pids = pids_copy;
     slot->pid_count = pid_count;
     slot->pending = pid_count;
     slot->state = JOB_RUNNING;
     slot->exit_code = 0;
+    slot->term_signal = 0;
     slot->background = background;
     slot->notified = 0;
     slot->command_line = line_copy;
@@ -262,7 +287,15 @@ void jobs_notify_done(void) {
         }
  
         char marca = (jobs[i].id == most_recent_done_id) ? '+' : '-';
-        printf("[%d]%c Done %s\n", jobs[i].id, marca, jobs[i].command_line);
+
+        // un job que murio por una senal no termino "Done": se muestra la senal, como hace bash
+        // ("Killed", "Terminated", ...)
+        if (jobs[i].term_signal != 0) {
+            printf("[%d]%c %s %s\n", jobs[i].id, marca, strsignal(jobs[i].term_signal),
+                   jobs[i].command_line);
+        } else {
+            printf("[%d]%c Done %s\n", jobs[i].id, marca, jobs[i].command_line);
+        }
  
         free_job(&jobs[i]);
     }

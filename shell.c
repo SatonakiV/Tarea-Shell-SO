@@ -28,7 +28,6 @@ static int install_signal_handlers(void){
 
     if (sigaction(SIGQUIT, &ignore_signal, NULL) == -1) {
         perror("mishell: sigaction(SIGQUIT)");
-
         return -1;
     }
 
@@ -54,6 +53,9 @@ static int read_line(char **line, size_t *capacity){
     int interactive = isatty(STDIN_FILENO);
 
     for (;;) {
+        // Los avisos de jobs terminados salen antes de cada prompt.
+        jobs_notify_done();
+
         if (interactive) {
             show_prompt();
         }
@@ -62,12 +64,16 @@ static int read_line(char **line, size_t *capacity){
         ssize_t length = getline(line, capacity, stdin);
 
         if (length >= 0) {
+            // si una senal corta la lectura a mitad de linea, getline() devuelve el trozo leido y
+            // deja stdin marcado con error: sin limpiarlo, la siguiente lectura fallaria de inmediato
+            if (ferror(stdin)) {
+                clearerr(stdin);
+            }
             return 1;
         }
 
         if (errno == EINTR) {
             clearerr(stdin);
-            jobs_notify_done();
             continue;
         }
 
@@ -102,7 +108,7 @@ static int builtin_cd(const Command *command){
     }
 
     if (chdir(directory) == -1) {
-        perror("cd");
+        fprintf(stderr, "cd: %s: %s\n", directory, strerror(errno));
         return 1;
     }
 
@@ -177,6 +183,11 @@ static int builtin_pmon(const Command *command){
 
     if (status == -1) {
         return 1;
+    }
+
+    // Separar el siguiente prompt del eco de Ctrl+C al salir de pmon.
+    if (isatty(STDIN_FILENO)) {
+        putchar('\n');
     }
 
     return 0;
@@ -328,13 +339,13 @@ int run_shell(void){
     jobs_init();
 
     while (!should_exit) {
-        jobs_notify_done();
-
+        // read_line() muestra los avisos de jobs terminados antes de cada prompt
         int read_status = read_line(&line, &capacity);
         if (read_status <= 0) {
             if (read_status < 0) {
                 exit_code = 1;
             }
+
             break;
         }
         Pipeline pipeline;
