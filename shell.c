@@ -13,36 +13,20 @@
 #include "jobs.h"
 #include "pmon.h"
 
-// la shell debe sobrevivir a Ctrl+C y Ctrl+\ (SIGINT y SIGQUIT)
-static volatile sig_atomic_t interrupted = 0;
-
-// Un pipeline foreground comparte el grupo de la shell, asi que la terminal le entrega Ctrl+C y
-// Ctrl+\ directamente a sus procesos (que las tienen en SIG_DFL). La shell solo las atrapa para no
-// morir y anota que hay que cerrar la linea donde la terminal hizo eco de "^C" o "^\"
-static void interrupt_handler(int signal_number){
-    (void)signal_number;
-    interrupted = 1;
-}
-
-// La shell captura SIGINT y SIGQUIT con el mismo handler.
+// La shell ignora SIGINT y SIGQUIT, como pide R6.
 // Los hijos restauran las disposiciones por defecto antes de execvp().
 static int install_signal_handlers(void){
-    struct sigaction sa;
+    struct sigaction ignore_signal = {0};
+    ignore_signal.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_signal.sa_mask);
+    ignore_signal.sa_flags = 0;
 
-    memset(&sa, 0, sizeof(sa));
-
-    sa.sa_handler = interrupt_handler;
-
-    sigemptyset(&sa.sa_mask);
-    // sin SA_RESTART a proposito: queremos que getline() vuelva con EINTR para redibujar el prompt
-    sa.sa_flags = 0;
-
-    if (sigaction(SIGINT, &sa, NULL) == -1) {
+    if (sigaction(SIGINT, &ignore_signal, NULL) == -1) {
         perror("mishell: sigaction(SIGINT)");
         return -1;
     }
 
-    if (sigaction(SIGQUIT, &sa, NULL) == -1) {
+    if (sigaction(SIGQUIT, &ignore_signal, NULL) == -1) {
         perror("mishell: sigaction(SIGQUIT)");
         return -1;
     }
@@ -69,17 +53,7 @@ static int read_line(char **line, size_t *capacity){
     int interactive = isatty(STDIN_FILENO);
 
     for (;;) {
-        // el terminal ya hizo eco de "^C" o "^\" sin salto de linea: se cierra antes de los
-        // avisos y del prompt para que no queden pegados a el
-        if (interrupted) {
-            interrupted = 0;
-
-            if (interactive) {
-                putchar('\n');
-            }
-        }
-
-        // los avisos de jobs background terminados salen justo antes del prompt
+        // Los avisos de jobs terminados salen antes de cada prompt.
         jobs_notify_done();
 
         if (interactive) {
@@ -211,9 +185,10 @@ static int builtin_pmon(const Command *command){
         return 1;
     }
 
-    // pmon solo termina con Ctrl+C, pero con su propio handler: se marca aqui para que los
-    // avisos y el prompt no queden pegados al "^C"
-    interrupted = 1;
+    // Separar el siguiente prompt del eco de Ctrl+C al salir de pmon.
+    if (isatty(STDIN_FILENO)) {
+        putchar('\n');
+    }
 
     return 0;
 }
@@ -370,7 +345,7 @@ int run_shell(void){
             if (read_status < 0) {
                 exit_code = 1;
             }
-            
+
             break;
         }
         Pipeline pipeline;

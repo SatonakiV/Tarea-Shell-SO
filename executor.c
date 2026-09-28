@@ -274,9 +274,7 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
 
     if (created > 0) {
-        // Aunque el fork() de algun comando haya fallado a mitad de camino,
-        // igual registramos los que SÍ se crearon para evitar que sus SIGCHLD futuros
-        // no encuentren job asociado y nadie espere por ellos.
+        // Registrar todos los hijos antes de desbloquear SIGCHLD.
         job_id = jobs_add(pids, created, pipeline->background, line);
     }
 
