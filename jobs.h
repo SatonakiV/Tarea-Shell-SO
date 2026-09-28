@@ -7,7 +7,17 @@
 #define JOBS_MAX 64
  
 void jobs_init(void);
- 
+
+// control de jobs (bonus Ctrl+Z): activo solo si la shell lee de una terminal y es su grupo foreground
+int jobs_job_control(void);
+int jobs_own_group(int background);
+void jobs_give_terminal(pid_t pgid);
+void jobs_take_terminal(void);
+
+// fg [n] y bg [n]: devuelven el codigo de salida del comando interno
+int jobs_fg(const char *arg);
+int jobs_bg(const char *arg);
+
 
 int jobs_add(const pid_t *pids, size_t pid_count, int background,
              const char *command_line);
