@@ -86,11 +86,17 @@ static void set_child_signals(void) {
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
+
+    // las de control de jobs que la shell ignora (ver jobs_init): el hijo si debe detenerse con
+    // Ctrl+Z o al leer la terminal desde background
+    sigaction(SIGTSTP, &sa, NULL);
+    sigaction(SIGTTIN, &sa, NULL);
+    sigaction(SIGTTOU, &sa, NULL);
 }
 
 // termina y recoge los hijos que alcanzaron a crearse cuando el pipeline no puede seguir
-// se hace PID por PID y no con kill(-pgid): un pipeline foreground comparte el grupo de la
-// shell (pgid queda en 0) y kill(0, ...) mataria tambien a la shell
+// se hace PID por PID y no con kill(-pgid): sin terminal, un pipeline foreground comparte el grupo
+// de la shell (pgid queda en 0) y kill(0, ...) mataria tambien a la shell
 static void kill_and_reap(const pid_t *pids, size_t count) {
     for (size_t j = 0; j < count; j++) {
         kill(pids[j], SIGTERM);
@@ -102,7 +108,7 @@ static void kill_and_reap(const pid_t *pids, size_t count) {
     }
 }
 
-static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, int background, pid_t pgid) {
+static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_count, size_t index, size_t command_count, int own_group, int take_terminal, pid_t pgid) {
     pid_t pid = fork();
 
     if(pid == -1) {
@@ -113,10 +119,16 @@ static pid_t spawn_command(const Command *command, int (*pipes)[2], size_t pipe_
 
     if(pid == 0) {
 
-        // solo un pipeline background sale del grupo de la shell (ver execute_pipeline)
-        if (background && setpgid(0, pgid) == -1) {
+        // el primer hijo crea el grupo del pipeline con su PID y el resto se une (ver execute_pipeline)
+        if (own_group && setpgid(0, pgid) == -1) {
             perror("mishell: setpgid");
             _exit(1);
+        }
+
+        // un foreground toma la terminal antes del exec para poder leerla desde el primer momento.
+        // Va antes de set_child_signals(): con SIGTTOU aun ignorada, tcsetpgrp() no lo detiene
+        if (take_terminal) {
+            jobs_give_terminal(getpgrp());
         }
 
         sigset_t sigchld_mask;
@@ -228,14 +240,16 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
     sigset_t old_mask;
     jobs_block_sigchld(&old_mask);
 
-    // solo un pipeline background va en su propio grupo de procesos: asi el Ctrl+C que la
-    // terminal manda a su grupo foreground (el de la shell) no lo alcanza. Un pipeline foreground
-    // se queda en el grupo de la shell, que es el que tiene la terminal: puede leerla sin recibir
-    // SIGTTIN y el kernel le entrega Ctrl+C y Ctrl+\ directamente, sin necesitar tcsetpgrp()
+    // Con control de jobs (la shell lee de una terminal) cada pipeline va en su propio grupo de
+    // procesos, y el foreground recibe la terminal con tcsetpgrp(): Ctrl+C, Ctrl+\ y Ctrl+Z le
+    // llegan solo a el y puede leerla. Un background no es el grupo de la terminal, asi que esas
+    // teclas no lo alcanzan. Sin terminal, el foreground se queda en el grupo de la shell
+    int own_group = jobs_own_group(pipeline -> background);
+    int take_terminal = !pipeline -> background && jobs_job_control();
     pid_t pgid = 0;
 
     for(created = 0; created < count; created++) {
-        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count, pipeline -> background, pgid);
+        pids[created] = spawn_command(&pipeline -> commands[created], pipes, pipe_count, created, count, own_group, take_terminal, pgid);
 
         if(pids[created] == -1) {
             result = -2;
@@ -243,15 +257,19 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
             break;
         }
 
-        if (pipeline -> background) {
-            // el primer hijo crea el grupo con su PID y el resto se une. El padre repite el
-            // setpgid() para que no importe quien corre primero despues del fork()
+        if (own_group) {
+            // el padre repite el setpgid() y el tcsetpgrp() del hijo para que no importe quien
+            // corre primero despues del fork()
             if (pgid == 0) {
                 pgid = pids[created];
             }
 
             if (setpgid(pids[created], pgid) == -1 && errno != EACCES && errno != ESRCH) {
                 perror("mishell: setpgid");
+            }
+
+            if (take_terminal && created == 0) {
+                jobs_give_terminal(pgid);
             }
         }
     }
@@ -263,6 +281,9 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
 
     if (result == -2) {
         kill_and_reap(pids, created);
+        if (take_terminal) {
+            jobs_take_terminal();
+        }
         jobs_unblock_sigchld(&old_mask);
         free(pids);
         return -2;
@@ -284,8 +305,19 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
         for (size_t i = 0; i < created; i++) {
             int wstatus;
             pid_t w;
-            while ((w = waitpid(pids[i], &wstatus, 0)) == -1 && errno == EINTR)
-                ;
+            for (;;) {
+                w = waitpid(pids[i], &wstatus, WUNTRACED);
+                if (w == -1 && errno == EINTR) {
+                    continue;
+                }
+                // sin espacio en la tabla no puede quedar como job detenido: se reanuda y se sigue esperando
+                if (w > 0 && WIFSTOPPED(wstatus)) {
+                    fprintf(stderr, "\nmishell: tabla de jobs llena, el comando no se puede detener\n");
+                    kill(pids[i], SIGCONT);
+                    continue;
+                }
+                break;
+            }
             if (w > 0 && pids[i] == last_pid) {
                 if (WIFEXITED(wstatus)) {
                     code = WEXITSTATUS(wstatus);
@@ -293,6 +325,9 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
                     code = 128 + WTERMSIG(wstatus);
                 }
             }
+        }
+        if (take_terminal) {
+            jobs_take_terminal();
         }
         jobs_unblock_sigchld(&old_mask);
         free(pids);
@@ -321,7 +356,8 @@ int execute_pipeline(const Pipeline *pipeline, const char *line, int *status) {
         return result;
     }
 
-    // Foreground: duerme hasta que el handler de SIGCHLD marque este job como terminado
+    // Foreground: duerme hasta que el handler de SIGCHLD marque este job como terminado o detenido
+    // (Ctrl+Z), y despues la shell recupera la terminal
     code = jobs_wait_foreground(job_id);
 
     if (status != NULL) {
